@@ -105,7 +105,7 @@ class Workflow():
         self.pattern_dag.remove_node(p_id)
         self.pattern_map.pop(p_id)
 
-    def parse(self):
+    def parse(self, bash_app = False, time_as_arg = False):
         if self.dag_parsed:
             self.dag_parsed.clear()
         self.dag_parsed = nx.DiGraph()
@@ -133,20 +133,48 @@ class Workflow():
         # Get the different execution times
         node_times = {n: self.dag_parsed.nodes[n].get("time", 1) for n in self.dag_parsed.nodes}
         times = list(set(node_times.values()))
-
-        for t in times:
-            # Define a function for each time, once that all tasks with the same time will use the same function
-            task_code = textwrap.dedent(f"""
-                @python_app()
-                def task_t{t}(inputs=[]):
-                    import time
-                    duration = {t}
-                    end = time.time() + duration
-                    while time.time() < end:
-                        _ = 123456789 ** 2
-                    return "done"
-            """).strip()
-            task_definitions.append(task_code)
+        if bash_app == False:
+            if time_as_arg == False:
+                for t in times:
+                    # Define a function for each time, once that all tasks with the same time will use the same function
+                    task_code = textwrap.dedent(f"""
+                        @python_app()
+                        def task_t{t}(inputs=[]):
+                            import time
+                            duration = {t}
+                            end = time.time() + duration
+                            while time.time() < end:
+                                _ = 123456789 ** 2
+                            return "done"
+                    """).strip()
+                    task_definitions.append(task_code)
+            else:
+                task_code = textwrap.dedent(f"""
+                        @python_app()
+                        def task_t(inputs=[], duration = 0):
+                            import time
+                            end = time.time() + duration
+                            while time.time() < end:
+                                _ = 123456789 ** 2
+                            return "done"
+                    """).strip()
+                task_definitions.append(task_code)
+        else:
+            # if time_as_arg == False:
+            for t in times:
+                task_code = textwrap.dedent(f"""
+                    @bash_app()
+                    def task_t{t}(inputs=[]):
+                        return 'end=$(( $(date +%s) + {t} )); while [ "$(date +%s)" -lt "$end" ]; do : $((123456789*123456789)); done; echo done'
+                """).strip()
+                task_definitions.append(task_code)
+            # else:
+            #     task_code = textwrap.dedent(f"""
+            #         @bash_app()
+            #         def task_t(inputs=[], duration = 0):
+            #             return 'end=$(( $(date +%s) + $1 )); while [ "$(date +%s)" -lt "$end" ]; do : $((123456789*123456789)); done; echo done'
+            #     """).strip()
+            #     task_definitions.append(task_code)
 
         # Each node has a variable, the function call is based on the definitions generated earlier
         for n in self.dag_parsed.nodes:
@@ -156,7 +184,10 @@ class Workflow():
             if parents:
                 params += ",".join(f"r_{p}" for p in parents)
             params += "]"
-            task_exec.append(f"r_{n} = task_t{time_}({params})")
+            if time_as_arg == False or bash_app == True:
+                task_exec.append(f"r_{n} = task_t{time_}({params})")
+            elif bash_app == False: # only supported in python app
+                task_exec.append(f"r_{n} = task_t({params}, duration = {time_})")
 
         return "\n\n".join(task_definitions) + "\n\n", "\n".join(task_exec)
     
