@@ -134,7 +134,7 @@ class Workflow():
                 continue
             self.dag_parsed = nx.compose(self.dag_parsed, dag)
 
-        # Conect all the connected componentes using the sink nodes from u and the source nodes from v
+        # Conect all the connected components using the sink nodes from u and the source nodes from v
         for (u, v) in self.pattern_dag.edges():
             pat_u = self.pattern_map[u]
             pat_v = self.pattern_map[v]
