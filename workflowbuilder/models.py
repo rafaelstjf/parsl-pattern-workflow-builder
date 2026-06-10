@@ -1,17 +1,23 @@
 import textwrap
 import networkx as nx
 import matplotlib.pyplot as plt
+
+
 class Pattern():
     def __init__(self, id_):
         self.id_ = id_
         self.dag = None
         self.num_tasks = 0
+
     def get_num_tasks(self):
         return self.num_tasks
+
     def get_dag(self):
         return self.dag
+
     def get_id(self):
         return self.id_
+
     def get_source_nodes(self):
         if not self.dag or len(self.dag) == 0:
             return set()
@@ -24,56 +30,68 @@ class Pattern():
 
         return {n for n in self.dag.nodes if self.dag.out_degree(n) == 0}
 
+
 class SingleTask(Pattern):
     def __init__(self, id_, time_):
         super().__init__(id_)
         self.num_tasks = 1
         self.dag = nx.DiGraph()
         self.dag.add_node(str(self.id_) + "_0", time=time_)
+
+
 class MapReduce(Pattern):
     def __init__(self, id_, n, time_):
         super().__init__(id_)
         self.dag = nx.DiGraph()
         self.num_tasks = n
-        if type(time_) == list:
+        if isinstance(time_, list):
             if len(time_) == n:
                 for i in range(0, n):
-                    self.dag.add_node(str(self.id_) + "_" + str(i), time=time_[i])
+                    self.dag.add_node(str(self.id_) + "_" +
+                                      str(i), time=time_[i])
         else:
             for i in range(0, n):
                 self.dag.add_node(str(self.id_) + "_" + str(i), time=time_)
         for i in range(0, n-1):
-            self.dag.add_edge(str(self.id_) + "_" + str(i), str(self.id_) + "_" + str(n-1))
+            self.dag.add_edge(str(self.id_) + "_" + str(i),
+                              str(self.id_) + "_" + str(n-1))
+
 
 class Fan(Pattern):
     def __init__(self, id_, n, time_):
         super().__init__(id_)
         self.num_tasks = n
         self.dag = nx.DiGraph()
-        if type(time_) == list:
+        if isinstance(time_, list):
             if len(time_) == n:
                 for i in range(0, n):
-                    self.dag.add_node(str(self.id_) + "_" + str(i), time=time_[i])
+                    self.dag.add_node(str(self.id_) + "_" +
+                                      str(i), time=time_[i])
         else:
             for i in range(0, n):
                 self.dag.add_node(str(self.id_) + "_" + str(i), time=time_)
         for i in range(1, n):
-            self.dag.add_edge(str(self.id_) + "_" + str(0), str(self.id_) + "_" + str(i))
+            self.dag.add_edge(str(self.id_) + "_" + str(0),
+                              str(self.id_) + "_" + str(i))
+
 
 class Pipeline(Pattern):
     def __init__(self, id_, n, time_):
         super().__init__(id_)
-        self.dag  = nx.DiGraph()
+        self.dag = nx.DiGraph()
         self.num_tasks = n
-        if type(time_) == list:
+        if isinstance(time_, list):
             if len(time_) == n:
                 for i in range(0, n):
-                    self.dag.add_node(str(self.id_) + "_" + str(i), time=time_[i])
+                    self.dag.add_node(str(self.id_) + "_" +
+                                      str(i), time=time_[i])
         else:
             for i in range(0, n):
                 self.dag.add_node(str(self.id_) + "_" + str(i), time=time_)
         for i in range(1, n):
-            self.dag.add_edge(str(self.id_) + "_" + str(i-1), str(self.id_) + "_" + str(i))
+            self.dag.add_edge(str(self.id_) + "_" + str(i-1),
+                              str(self.id_) + "_" + str(i))
+
 
 class Workflow():
     def __init__(self) -> None:
@@ -81,7 +99,7 @@ class Workflow():
         self.pattern_dag = nx.DiGraph()
         self.root_pid = None
         self.dag_parsed = None
-    
+
     def add_pattern(self, pattern):
         p_id = pattern.get_id()
         if self.pattern_map.get(p_id) == None:
@@ -89,23 +107,23 @@ class Workflow():
             self.pattern_dag.add_node(p_id)
             if self.root_pid == None:
                 self.root_pid = p_id
-    
+
     def add_pattern_edge(self, p_id1, p_id2):
         if not self.pattern_dag.has_edge(p_id1, p_id2):
             self.pattern_dag.add_edge(p_id1, p_id2)
-    
+
     def set_new_root(self, p_id):
         if self.pattern_map.get(p_id) is not None:
             self.root_pid = p_id
 
     def remove_pattern_edge(self, p_id1, p_id2):
         self.pattern_dag.remove_edge(p_id1, p_id2)
-    
+
     def remove_pattern_node(self, p_id):
         self.pattern_dag.remove_node(p_id)
         self.pattern_map.pop(p_id)
 
-    def parse(self, bash_app = False, time_as_arg = False):
+    def parse(self, bash_app=False, time_as_arg=False):
         if self.dag_parsed:
             self.dag_parsed.clear()
         self.dag_parsed = nx.DiGraph()
@@ -131,10 +149,11 @@ class Workflow():
         task_exec = []
 
         # Get the different execution times
-        node_times = {n: self.dag_parsed.nodes[n].get("time", 1) for n in self.dag_parsed.nodes}
+        node_times = {n: self.dag_parsed.nodes[n].get(
+            "time", 1) for n in self.dag_parsed.nodes}
         times = list(set(node_times.values()))
-        if bash_app == False:
-            if time_as_arg == False:
+        if bash_app is False:
+            if time_as_arg is False:
                 for t in times:
                     # Define a function for each time, once that all tasks with the same time will use the same function
                     task_code = textwrap.dedent(f"""
@@ -186,12 +205,13 @@ class Workflow():
             params += "]"
             if time_as_arg == False or bash_app == True:
                 task_exec.append(f"r_{n} = task_t{time_}({params})")
-            elif bash_app == False: # only supported in python app
-                task_exec.append(f"r_{n} = task_t({params}, duration = {time_})")
+            elif bash_app == False:  # only supported in python app
+                task_exec.append(
+                    f"r_{n} = task_t({params}, duration = {time_})")
 
         return "\n\n".join(task_definitions) + "\n\n", "\n".join(task_exec)
-    
-    def export_pydot(self, save_pydot = True, filename = None):
+
+    def export_pydot(self, save_pydot=True, filename=None):
         if self.dag_parsed is not None:
             pydot_graph = nx.nx_pydot.to_pydot(self.dag_parsed)
             for node in pydot_graph.get_nodes():
@@ -211,6 +231,6 @@ class Workflow():
                 pydot_graph.write(filename, format="pdf")
                 print(f"DAG stored at: {filename}")
             print(pydot_graph.to_string())
-            
+
         else:
             print("Error! the DAG was not parsed!")
