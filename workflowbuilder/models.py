@@ -108,9 +108,59 @@ class Workflow():
             if self.root_pid == None:
                 self.root_pid = p_id
 
-    def add_pattern_edge(self, p_id1, p_id2):
-        if not self.pattern_dag.has_edge(p_id1, p_id2):
-            self.pattern_dag.add_edge(p_id1, p_id2)
+    def add_pattern_edge(self, p_id1, p_id2, policy="all_to_all", source_index=None, target_index=None):
+        self.pattern_dag.add_edge(
+            p_id1,
+            p_id2,
+            policy=policy,
+            source_index=source_index,
+            target_index=target_index,
+        )
+
+    def _connect_pattern_nodes(self, pat_u, pat_v, policy="all_to_all", source_index=None, target_index=None):
+        sink_nodes = sorted(pat_u.get_sink_nodes())
+        source_nodes = sorted(pat_v.get_source_nodes())
+
+        if not sink_nodes or not source_nodes:
+            return
+
+        if policy == "all_to_all":
+            for out_node in sink_nodes:
+                for in_node in source_nodes:
+                    self.dag_parsed.add_edge(out_node, in_node)
+            return
+
+        if policy == "one_to_one":
+            if len(sink_nodes) != len(source_nodes):
+                raise ValueError(
+                    f"Cannot connect '{pat_u.get_id()}' to '{pat_v.get_id()}' with one_to_one policy: "
+                    f"{len(sink_nodes)} sink nodes and {len(source_nodes)} source nodes."
+                )
+            for out_node, in_node in zip(sink_nodes, source_nodes):
+                self.dag_parsed.add_edge(out_node, in_node)
+            return
+
+        if policy == "target_index":
+            if target_index is None:
+                raise ValueError("target_index policy requires target_index.")
+            if target_index < 0 or target_index >= len(source_nodes):
+                raise ValueError(
+                    f"target_index {target_index} is out of range for pattern '{pat_v.get_id()}'."
+                )
+
+            selected_sinks = sink_nodes
+            if source_index is not None:
+                if source_index < 0 or source_index >= len(sink_nodes):
+                    raise ValueError(
+                        f"source_index {source_index} is out of range for pattern '{pat_u.get_id()}'."
+                    )
+                selected_sinks = [sink_nodes[source_index]]
+
+            for out_node in selected_sinks:
+                self.dag_parsed.add_edge(out_node, source_nodes[target_index])
+            return
+
+        raise ValueError(f"Unknown connection policy: {policy}")
 
     def set_new_root(self, p_id):
         if self.pattern_map.get(p_id) is not None:
@@ -134,16 +184,17 @@ class Workflow():
                 continue
             self.dag_parsed = nx.compose(self.dag_parsed, dag)
 
-        # Conect all the connected components using the sink nodes from u and the source nodes from v
-        for (u, v) in self.pattern_dag.edges():
+        # Connect pattern edges using the configured policy for each edge.
+        for (u, v, edge_data) in self.pattern_dag.edges(data=True):
             pat_u = self.pattern_map[u]
             pat_v = self.pattern_map[v]
-
-            for out_node in pat_u.get_sink_nodes():
-                for in_node in pat_v.get_source_nodes():
-                    u_out = out_node
-                    v_in = in_node
-                    self.dag_parsed.add_edge(u_out, v_in)
+            self._connect_pattern_nodes(
+                pat_u,
+                pat_v,
+                policy=edge_data.get("policy", "all_to_all"),
+                source_index=edge_data.get("source_index"),
+                target_index=edge_data.get("target_index"),
+            )
 
         task_definitions = []
         task_exec = []
