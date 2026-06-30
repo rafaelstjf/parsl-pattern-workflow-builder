@@ -117,6 +117,7 @@ class Workflow():
             target_index=target_index,
         )
 
+
     def _connect_pattern_nodes(self, pat_u, pat_v, policy="all_to_all", source_index=None, target_index=None):
         sink_nodes = sorted(pat_u.get_sink_nodes())
         source_nodes = sorted(pat_v.get_source_nodes())
@@ -143,23 +144,29 @@ class Workflow():
         if policy == "target_index":
             if target_index is None:
                 raise ValueError("target_index policy requires target_index.")
-            if target_index < 0 or target_index >= len(source_nodes):
+            # The indexes are not the same internally, so they have to be composed
+            compose_target_id = f"{pat_v.get_id()}_{target_index}"
+            target_node = next((node for node in source_nodes if node == compose_target_id), None)
+
+            if target_node is None:
                 raise ValueError(
-                    f"target_index {target_index} is out of range for pattern '{pat_v.get_id()}'."
+                    f"target_index {target_index} does not match any source node for pattern '{pat_v.get_id()}'."
                 )
 
-            selected_sinks = sink_nodes
-            if source_index is not None:
-                if source_index < 0 or source_index >= len(sink_nodes):
+            if source_index is None:
+                for source_node in sink_nodes:
+                    self.dag_parsed.add_edge(source_node, target_node)
+            else:
+                compose_source_id = f"{pat_u.get_id()}_{source_index}"
+                source_node = next((node for node in sink_nodes if node == compose_source_id), None)
+
+                if source_node is None:
                     raise ValueError(
-                        f"source_index {source_index} is out of range for pattern '{pat_u.get_id()}'."
+                        f"source_index {source_index} does not match any sink node for pattern '{pat_u.get_id()}'."
                     )
-                selected_sinks = [sink_nodes[source_index]]
 
-            for out_node in selected_sinks:
-                self.dag_parsed.add_edge(out_node, source_nodes[target_index])
-            return
-
+                self.dag_parsed.add_edge(source_node, target_node)
+        return
         raise ValueError(f"Unknown connection policy: {policy}")
 
     def set_new_root(self, p_id):
