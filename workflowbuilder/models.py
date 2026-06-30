@@ -3,28 +3,65 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 
+
 class Pattern():
+    """
+    @brief Base class representing a workflow pattern.
+
+    A pattern encapsulates a directed acyclic graph (DAG) representing a
+    reusable workflow structure. Derived classes implement specific
+    communication patterns such as pipelines, fan-out, and map-reduce.
+    """
     def __init__(self, id_):
         self.id_ = id_
         self.dag = None
         self.num_tasks = 0
 
-    def get_num_tasks(self):
+    def get_num_tasks(self) -> int:
+        """
+        @brief Returns the number of tasks in the pattern.
+
+        @return Number of tasks.
+        """
         return self.num_tasks
 
     def get_dag(self):
+        """
+        @brief Returns the DAG associated with the pattern.
+
+        @return A NetworkX directed graph.
+        """
         return self.dag
 
     def get_id(self):
+        """
+        @brief Returns the pattern identifier.
+
+        @return Pattern identifier.
+        """
         return self.id_
 
     def get_source_nodes(self):
+        """
+        @brief Returns all source nodes of the pattern.
+
+        Source nodes are those with zero incoming edges.
+
+        @return Set containing the source nodes.
+        """
         if not self.dag or len(self.dag) == 0:
             return set()
 
         return {n for n in self.dag.nodes if self.dag.in_degree(n) == 0}
 
     def get_sink_nodes(self):
+        """
+        @brief Returns all sink nodes of the pattern.
+
+        Sink nodes are those with zero outgoing edges.
+
+        @return Set containing the sink nodes.
+        """
         if not self.dag or len(self.dag) == 0:
             return set()
 
@@ -32,7 +69,16 @@ class Pattern():
 
 
 class SingleTask(Pattern):
+    """
+    @brief Pattern composed of a single task.
+    """
     def __init__(self, id_, time_):
+        """
+        @brief Creates a single-task pattern.
+
+        @param id_ Pattern identifier.
+        @param time_ Execution time assigned to the task.
+        """
         super().__init__(id_)
         self.num_tasks = 1
         self.dag = nx.DiGraph()
@@ -40,7 +86,21 @@ class SingleTask(Pattern):
 
 
 class MapReduce(Pattern):
+    """
+    @brief Implements a MapReduce workflow pattern.
+
+    The last task acts as the reduce stage and depends on every preceding
+    map task.
+    """
     def __init__(self, id_, n, time_):
+        """
+        @brief Creates a MapReduce pattern.
+
+        @param id_ Pattern identifier.
+        @param n Number of tasks.
+        @param time_ Execution time for each task or a list containing the
+                    execution time of every task.
+        """
         super().__init__(id_)
         self.dag = nx.DiGraph()
         self.num_tasks = n
@@ -58,7 +118,20 @@ class MapReduce(Pattern):
 
 
 class Fan(Pattern):
+    """
+    @brief Implements a fan-out workflow pattern.
+
+    The first task precedes all remaining tasks.
+    """
     def __init__(self, id_, n, time_):
+        """
+        @brief Creates a fan-out pattern.
+
+        @param id_ Pattern identifier.
+        @param n Number of tasks.
+        @param time_ Execution time for each task or a list containing the
+                    execution time of every task.
+    """
         super().__init__(id_)
         self.num_tasks = n
         self.dag = nx.DiGraph()
@@ -76,7 +149,20 @@ class Fan(Pattern):
 
 
 class Pipeline(Pattern):
+    """
+    @brief Implements a pipeline workflow pattern.
+
+    Tasks are connected sequentially.
+    """
     def __init__(self, id_, n, time_):
+        """
+        @brief Creates a pipeline pattern.
+
+        @param id_ Pattern identifier.
+        @param n Number of tasks.
+        @param time_ Execution time for each task or a list containing the
+                    execution time of every task.
+        """
         super().__init__(id_)
         self.dag = nx.DiGraph()
         self.num_tasks = n
@@ -94,13 +180,28 @@ class Pipeline(Pattern):
 
 
 class Workflow():
+    """
+    @brief Builds and manipulates workflows composed of multiple patterns.
+
+    A workflow is represented as a DAG whose vertices are tasks belonging to
+    individual patterns. Patterns are connected according to configurable
+    connection policies and can later be exported or translated into Parsl
+    applications.
+    """
     def __init__(self) -> None:
         self.pattern_map = dict()
         self.pattern_dag = nx.DiGraph()
         self.root_pid = None
         self.dag_parsed = None
 
-    def add_pattern(self, pattern):
+    def add_pattern(self, pattern) -> None:
+        """
+        @brief Adds a pattern to the workflow.
+
+        @param pattern Pattern instance to be inserted.
+
+        @return None
+        """
         p_id = pattern.get_id()
         if self.pattern_map.get(p_id) == None:
             self.pattern_map[p_id] = pattern
@@ -108,7 +209,18 @@ class Workflow():
             if self.root_pid == None:
                 self.root_pid = p_id
 
-    def add_pattern_edge(self, p_id1, p_id2, policy="all_to_all", source_index=None, target_index=None):
+    def add_pattern_edge(self, p_id1, p_id2, policy="all_to_all", source_index=None, target_index=None) -> None:
+        """
+        @brief Creates a dependency between two patterns.
+
+        @param p_id1 Identifier of the source pattern.
+        @param p_id2 Identifier of the target pattern.
+        @param policy Connection policy.
+        @param source_index Optional sink node index in the source pattern.
+        @param target_index Optional source node index in the target pattern.
+
+        @return None
+        """
         self.pattern_dag.add_edge(
             p_id1,
             p_id2,
@@ -116,8 +228,7 @@ class Workflow():
             source_index=source_index,
             target_index=target_index,
         )
-
-
+        
     def _connect_pattern_nodes(self, pat_u, pat_v, policy="all_to_all", source_index=None, target_index=None):
         sink_nodes = sorted(pat_u.get_sink_nodes())
         source_nodes = sorted(pat_v.get_source_nodes())
@@ -170,17 +281,56 @@ class Workflow():
         raise ValueError(f"Unknown connection policy: {policy}")
 
     def set_new_root(self, p_id):
+        """
+        @brief Sets a new root pattern.
+
+        @param p_id Identifier of the new root pattern.
+
+        @return None
+        """
         if self.pattern_map.get(p_id) is not None:
             self.root_pid = p_id
 
     def remove_pattern_edge(self, p_id1, p_id2):
+        """
+        @brief Removes a dependency between two patterns.
+
+        @param p_id1 Identifier of the source pattern.
+        @param p_id2 Identifier of the target pattern.
+
+        @return None
+        """
         self.pattern_dag.remove_edge(p_id1, p_id2)
 
     def remove_pattern_node(self, p_id):
+        """
+        @brief Removes a pattern from the workflow.
+
+        The pattern and all of its connections are removed.
+
+        @param p_id Identifier of the pattern.
+
+        @return None
+        """
         self.pattern_dag.remove_node(p_id)
         self.pattern_map.pop(p_id)
 
     def parse(self, bash_app=False, time_as_arg=False):
+        """
+        @brief Generates the complete workflow DAG and the corresponding Parsl code.
+
+        This method composes all pattern DAGs, connects them according to their
+        configured policies, and generates the task definitions and execution
+        statements.
+
+        @param bash_app Generate Bash applications instead of Python applications.
+        @param time_as_arg Pass the execution time as a task argument instead of
+                        generating one function per execution time.
+
+        @return A tuple containing:
+                - The generated task definitions.
+                - The generated workflow execution code.
+        """
         if self.dag_parsed:
             self.dag_parsed.clear()
         self.dag_parsed = nx.DiGraph()
@@ -270,6 +420,16 @@ class Workflow():
         return "\n\n".join(task_definitions) + "\n\n", "\n".join(task_exec)
 
     def export_pydot(self, save_pydot=True, filename=None):
+        """
+        @brief Exports the parsed workflow DAG as a Graphviz graph.
+
+        Optionally saves the graph as a PDF file.
+
+        @param save_pydot If True, writes the graph to a file.
+        @param filename Output filename. If None, "workflow.pdf" is used.
+
+        @return None
+        """
         if self.dag_parsed is not None:
             pydot_graph = nx.nx_pydot.to_pydot(self.dag_parsed)
             for node in pydot_graph.get_nodes():
