@@ -425,9 +425,24 @@ class Workflow():
                 task_definitions.append(task_code)
 
         else:
-            # TODO: Add support to pycompss' binary
-            return None
+            if time_as_arg is False:
+                for t in times:
+                    task_code = textwrap.dedent(f"""
+                        @binary(
+                            binary="/bin/bash",
+                            args="-c 'end=$(( $(date +%s) + {t} )); "
+                                "while [ \\"$(date +%s)\\" -lt \\"$end\\" ]; "
+                                "do : $((123456789*123456789)); done; "
+                                "echo done'",
+                            fail_by_exit_value=True
+                        )
+                        @task(inputs=COLLECTION_IN, returns=int)
+                        def task_t{t}(inputs=[]):
+                            pass
+                    """).strip()
 
+                    task_definitions.append(task_code)
+    
         # Each node has a variable; the function call is based on the
         # definitions generated earlier
         for n in self.dag_parsed.nodes:
