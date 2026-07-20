@@ -188,11 +188,12 @@ class Workflow():
     connection policies and can later be exported or translated into Parsl
     applications.
     """
-    def __init__(self) -> None:
+    def __init__(self, wms="parsl") -> None:
         self.pattern_map = dict()
         self.pattern_dag = nx.DiGraph()
         self.root_pid = None
         self.dag_parsed = None
+        self.wms = wms
 
     def add_pattern(self, pattern) -> None:
         """
@@ -315,47 +316,9 @@ class Workflow():
         self.pattern_dag.remove_node(p_id)
         self.pattern_map.pop(p_id)
 
-    def parse(self, bash_app=False, time_as_arg=False):
-        """
-        @brief Generates the complete workflow DAG and the corresponding Parsl code.
-
-        This method composes all pattern DAGs, connects them according to their
-        configured policies, and generates the task definitions and execution
-        statements.
-
-        @param bash_app Generate Bash applications instead of Python applications.
-        @param time_as_arg Pass the execution time as a task argument instead of
-                        generating one function per execution time.
-
-        @return A tuple containing:
-                - The generated task definitions.
-                - The generated workflow execution code.
-        """
-        if self.dag_parsed:
-            self.dag_parsed.clear()
-        self.dag_parsed = nx.DiGraph()
-        # Insert all the patterns in the complete dag
-        for pid, pattern in self.pattern_map.items():
-            dag = pattern.get_dag()
-            if dag is None or len(dag) == 0:
-                continue
-            self.dag_parsed = nx.compose(self.dag_parsed, dag)
-
-        # Connect pattern edges using the configured policy for each edge.
-        for (u, v, edge_data) in self.pattern_dag.edges(data=True):
-            pat_u = self.pattern_map[u]
-            pat_v = self.pattern_map[v]
-            self._connect_pattern_nodes(
-                pat_u,
-                pat_v,
-                policy=edge_data.get("policy", "all_to_all"),
-                source_index=edge_data.get("source_index"),
-                target_index=edge_data.get("target_index"),
-            )
-
+    def __parse_to_parsl(self, bash_app=False, time_as_arg=False):
         task_definitions = []
         task_exec = []
-
         # Get the different execution times
         node_times = {n: self.dag_parsed.nodes[n].get(
             "time", 1) for n in self.dag_parsed.nodes}
@@ -418,6 +381,123 @@ class Workflow():
                     f"r_{n} = task_t({params}, duration = {time_})")
 
         return "\n\n".join(task_definitions) + "\n\n", "\n".join(task_exec)
+
+    def __parse_to_pycompss(self, bash_app=False, time_as_arg=False):
+        task_definitions = []
+        task_exec = []
+
+        # Get the different execution times
+        node_times = {
+            n: self.dag_parsed.nodes[n].get("time", 1)
+            for n in self.dag_parsed.nodes
+        }
+
+        times = list(set(node_times.values()))
+
+        if bash_app is False:
+            if time_as_arg is False:
+                for t in times:
+                    # Define a function for each time, since all tasks with the
+                    # same time will use the same function
+                    task_code = textwrap.dedent(f"""
+                        @task(inputs=COLLECTION_IN, returns=str)
+                        def task_t{t}(inputs=[]):
+                            import time
+                            duration = {t}
+                            end = time.time() + duration
+                            while time.time() < end:
+                                _ = 123456789 ** 2
+                            return "done"
+                    """).strip()
+
+                    task_definitions.append(task_code)
+            else:
+                task_code = textwrap.dedent("""
+                    @task(inputs=COLLECTION_IN, returns=str)
+                    def task_t(inputs=[], duration=0):
+                        import time
+                        end = time.time() + duration
+                        while time.time() < end:
+                            _ = 123456789 ** 2
+                        return "done"
+                """).strip()
+
+                task_definitions.append(task_code)
+
+        else:
+            # TODO: Add support to pycompss' binary
+            return None
+
+        # Each node has a variable; the function call is based on the
+        # definitions generated earlier
+        for n in self.dag_parsed.nodes:
+            time_ = node_times[n]
+            parents = list(self.dag_parsed.predecessors(n))
+
+            params = "inputs=["
+
+            if parents:
+                params += ",".join(f"r_{p}" for p in parents)
+
+            params += "]"
+
+            if time_as_arg is False or bash_app is True:
+                task_exec.append(f"r_{n} = task_t{time_}({params})")
+            elif bash_app is False:
+                task_exec.append(
+                    f"r_{n} = task_t({params}, duration={time_})"
+                )
+
+        return (
+            "\n\n".join(task_definitions) + "\n\n",
+            "\n".join(task_exec)
+        )
+    
+    def parse(self, bash_app=False, time_as_arg=False):
+        """
+        @brief Generates the complete workflow DAG and the corresponding Parsl code.
+
+        This method composes all pattern DAGs, connects them according to their
+        configured policies, and generates the task definitions and execution
+        statements.
+
+        @param bash_app Generate Bash applications instead of Python applications.
+        @param time_as_arg Pass the execution time as a task argument instead of
+                        generating one function per execution time.
+
+        @return A tuple containing:
+                - The generated task definitions.
+                - The generated workflow execution code.
+        """
+        if self.dag_parsed:
+            self.dag_parsed.clear()
+        self.dag_parsed = nx.DiGraph()
+        # Insert all the patterns in the complete dag
+        for pid, pattern in self.pattern_map.items():
+            dag = pattern.get_dag()
+            if dag is None or len(dag) == 0:
+                continue
+            self.dag_parsed = nx.compose(self.dag_parsed, dag)
+
+        # Connect pattern edges using the configured policy for each edge.
+        for (u, v, edge_data) in self.pattern_dag.edges(data=True):
+            pat_u = self.pattern_map[u]
+            pat_v = self.pattern_map[v]
+            self._connect_pattern_nodes(
+                pat_u,
+                pat_v,
+                policy=edge_data.get("policy", "all_to_all"),
+                source_index=edge_data.get("source_index"),
+                target_index=edge_data.get("target_index"),
+            )
+        
+        if self.wms == "parsl":
+            return self.__parse_to_parsl(bash_app, time_as_arg)
+        elif self.wms == "pycompss":
+            return self.__parse_to_pycompss(bash_app, time_as_arg)
+        else:
+            print("WMS not supported for parsing!")
+            return None
 
     def export_pydot(self, save_pydot=True, filename=None):
         """
