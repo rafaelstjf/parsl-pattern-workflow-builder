@@ -1,4 +1,5 @@
 import textwrap
+import re
 import networkx as nx
 import matplotlib.pyplot as plt
 
@@ -230,9 +231,26 @@ class Workflow():
             target_index=target_index,
         )
         
+    def _node_sort_key(self, node):
+        return [
+            int(part) if part.isdigit() else part
+            for part in re.split(r"(\d+)", str(node))
+        ]
+
+    def _select_node_by_index(self, nodes, pattern_id, index, node_kind):
+        if index is None:
+            return None
+
+        ordered_nodes = sorted(nodes, key=self._node_sort_key)
+        if isinstance(index, int) and 0 <= index < len(ordered_nodes):
+            return ordered_nodes[index]
+
+        composed_id = f"{pattern_id}_{index}"
+        return next((node for node in ordered_nodes if node == composed_id), None)
+
     def _connect_pattern_nodes(self, pat_u, pat_v, policy="all_to_all", source_index=None, target_index=None):
-        sink_nodes = sorted(pat_u.get_sink_nodes())
-        source_nodes = sorted(pat_v.get_source_nodes())
+        sink_nodes = sorted(pat_u.get_sink_nodes(), key=self._node_sort_key)
+        source_nodes = sorted(pat_v.get_source_nodes(), key=self._node_sort_key)
 
         if not sink_nodes or not source_nodes:
             return
@@ -256,9 +274,13 @@ class Workflow():
         if policy == "target_index":
             if target_index is None:
                 raise ValueError("target_index policy requires target_index.")
-            # The indexes are not the same internally, so they have to be composed
-            compose_target_id = f"{pat_v.get_id()}_{target_index}"
-            target_node = next((node for node in source_nodes if node == compose_target_id), None)
+
+            target_node = self._select_node_by_index(
+                source_nodes,
+                pat_v.get_id(),
+                target_index,
+                "source",
+            )
 
             if target_node is None:
                 raise ValueError(
@@ -269,8 +291,12 @@ class Workflow():
                 for source_node in sink_nodes:
                     self.dag_parsed.add_edge(source_node, target_node)
             else:
-                compose_source_id = f"{pat_u.get_id()}_{source_index}"
-                source_node = next((node for node in sink_nodes if node == compose_source_id), None)
+                source_node = self._select_node_by_index(
+                    sink_nodes,
+                    pat_u.get_id(),
+                    source_index,
+                    "sink",
+                )
 
                 if source_node is None:
                     raise ValueError(
@@ -278,7 +304,8 @@ class Workflow():
                     )
 
                 self.dag_parsed.add_edge(source_node, target_node)
-        return
+            return
+
         raise ValueError(f"Unknown connection policy: {policy}")
 
     def set_new_root(self, p_id):
@@ -322,14 +349,19 @@ class Workflow():
         # Get the different execution times
         node_times = {n: self.dag_parsed.nodes[n].get(
             "time", 1) for n in self.dag_parsed.nodes}
-        times = list(set(node_times.values()))
+        times = list(dict.fromkeys(node_times.values()))
+        task_names = {
+            time_: f"task_t_{index}"
+            for index, time_ in enumerate(times)
+        }
         if bash_app is False:
             if time_as_arg is False:
                 for t in times:
+                    task_name = task_names[t]
                     # Define a function for each time, once that all tasks with the same time will use the same function
                     task_code = textwrap.dedent(f"""
                         @python_app()
-                        def task_t{t}(inputs=[]):
+                        def {task_name}(inputs=[]):
                             import time
                             duration = {t}
                             end = time.time() + duration
@@ -352,9 +384,10 @@ class Workflow():
         else:
             # if time_as_arg == False:
             for t in times:
+                task_name = task_names[t]
                 task_code = textwrap.dedent(f"""
                     @bash_app()
-                    def task_t{t}(inputs=[]):
+                    def {task_name}(inputs=[]):
                         return 'end=$(( $(date +%s) + {t} )); while [ "$(date +%s)" -lt "$end" ]; do : $((123456789*123456789)); done; echo done'
                 """).strip()
                 task_definitions.append(task_code)
@@ -367,7 +400,7 @@ class Workflow():
             #     task_definitions.append(task_code)
 
         # Each node has a variable, the function call is based on the definitions generated earlier
-        for n in self.dag_parsed.nodes:
+        for n in nx.topological_sort(self.dag_parsed):
             time_ = node_times[n]
             parents = list(self.dag_parsed.predecessors(n))
             params = "inputs=["
@@ -375,7 +408,9 @@ class Workflow():
                 params += ",".join(f"r_{p}" for p in parents)
             params += "]"
             if time_as_arg == False or bash_app == True:
-                task_exec.append(f"r_{n} = task_t{time_}({params})")
+                task_exec.append(
+                    f"r_{n} = {task_names[time_]}({params})"
+                )
             elif bash_app == False:  # only supported in python app
                 task_exec.append(
                     f"r_{n} = task_t({params}, duration = {time_})")
@@ -392,16 +427,21 @@ class Workflow():
             for n in self.dag_parsed.nodes
         }
 
-        times = list(set(node_times.values()))
+        times = list(dict.fromkeys(node_times.values()))
+        task_names = {
+            time_: f"task_t_{index}"
+            for index, time_ in enumerate(times)
+        }
 
         if bash_app is False:
             if time_as_arg is False:
                 for t in times:
+                    task_name = task_names[t]
                     # Define a function for each time, since all tasks with the
                     # same time will use the same function
                     task_code = textwrap.dedent(f"""
                         @task(inputs=COLLECTION_IN, returns=str)
-                        def task_t{t}(inputs=[]):
+                        def {task_name}(inputs=[]):
                             import time
                             duration = {t}
                             end = time.time() + duration
@@ -425,27 +465,12 @@ class Workflow():
                 task_definitions.append(task_code)
 
         else:
-            if time_as_arg is False:
-                for t in times:
-                    task_code = textwrap.dedent(f"""
-                        @binary(
-                            binary="/bin/bash",
-                            args="-c 'end=$(( $(date +%s) + {t} )); "
-                                "while [ \\"$(date +%s)\\" -lt \\"$end\\" ]; "
-                                "do : $((123456789*123456789)); done; "
-                                "echo done'",
-                            fail_by_exit_value=True
-                        )
-                        @task(inputs=COLLECTION_IN, returns=int)
-                        def task_t{t}(inputs=[]):
-                            pass
-                    """).strip()
+            # TODO: Add support to pycompss' binary
+            return None
 
-                    task_definitions.append(task_code)
-    
         # Each node has a variable; the function call is based on the
         # definitions generated earlier
-        for n in self.dag_parsed.nodes:
+        for n in nx.topological_sort(self.dag_parsed):
             time_ = node_times[n]
             parents = list(self.dag_parsed.predecessors(n))
 
@@ -457,7 +482,9 @@ class Workflow():
             params += "]"
 
             if time_as_arg is False or bash_app is True:
-                task_exec.append(f"r_{n} = task_t{time_}({params})")
+                task_exec.append(
+                    f"r_{n} = {task_names[time_]}({params})"
+                )
             elif bash_app is False:
                 task_exec.append(
                     f"r_{n} = task_t({params}, duration={time_})"
